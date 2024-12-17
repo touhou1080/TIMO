@@ -4,10 +4,10 @@ Official Pytorch Implementation of  [TIMO](https://arxiv.org/abs/2412.11375).
 
 ## Introduction
 Contrastive Language-Image Pretraining (CLIP) has been widely used in vision tasks. Notably, CLIP has demonstrated promising performance in few-shot learning (FSL).
-However, existing CLIP-based methods in training-free FSL (\emph{i.e.,} without the requirement of additional training) mainly learn different modalities independently, leading to two essential issues: 1) severe anomalous match in image modality; 2) varying quality of generated text prompts.
+However, existing CLIP-based methods in training-free FSL (i.e., without the requirement of additional training) mainly learn different modalities independently, leading to two essential issues: 1) severe anomalous match in image modality; 2) varying quality of generated text prompts.
 To address these issues, we build a mutual guidance mechanism, that introduces an Image-Guided-Text (IGT) component to rectify varying quality of text prompts through image representations, and a Text-Guided-Image (TGI) component to mitigate the anomalous match of image modality through text representations.
-By integrating IGT and TGI, we adopt a perspective of \textbf{T}ext-\textbf{I}mage \textbf{M}utual guidance \textbf{O}ptimization, proposing TIMO.
-Extensive experiments show that TIMO significantly outperforms the state-of-the-art (SOTA) training-free method. Additionally, by exploring the extent of mutual guidance, we propose an enhanced variant, TIMO-S, which even surpasses the best training-required methods by 0.33\% with approximately \textbf{×100} less time cost.
+By integrating IGT and TGI, we adopt a perspective of Text-Image Mutual guidance Optimization, proposing TIMO.
+Extensive experiments show that TIMO significantly outperforms the state-of-the-art (SOTA) training-free method. Additionally, by exploring the extent of mutual guidance, we propose an enhanced variant, TIMO-S, which even surpasses the best training-required methods by 0.33% with approximately ×100 less time cost.
 
 <div align="center">
   <img width=800 src="framework.png"/>
