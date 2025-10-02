@@ -12,6 +12,45 @@ def cls_acc(output, target, topk=1):
     acc = 100 * acc / target.shape[0]
     return acc
 
+def cal_criterion_scores(cfg, clip_weights, cache_keys, only_use_txt=True):
+    """
+    Calculates and returns the criterion scores for all feature dimensions,
+    without performing top-k selection. This is used for searching over k.
+    """
+    feat_dim, cate_num = clip_weights.shape
+    text_feat = clip_weights.t().unsqueeze(1)
+    
+    if only_use_txt:
+        feats = text_feat.squeeze()
+        sim_sum = torch.zeros((feat_dim)).cuda()
+        count = 0
+        for i in range(cate_num):
+            for j in range(cate_num):
+                if i != j:
+                    sim_sum += feats[i, :] * feats[j, :]
+                    count += 1
+        sim = sim_sum / count
+    else:
+        cache_feat = cache_keys.reshape(cate_num, -1, feat_dim)
+        feats = torch.cat([text_feat, cache_feat], dim=1)
+        samp_num = feats.shape[1]
+        
+        sim_sum = torch.zeros((feat_dim)).cuda()
+        count = 0
+        for i in range(cate_num):
+            for j in range(cate_num):
+                for m in range(samp_num):
+                    for n in range(samp_num):
+                        if i != j:
+                            sim_sum += feats[i, m, :] * feats[j, n, :]
+                            count += 1
+        sim = sim_sum / count
+
+    # Calculate the final criterion score for each dimension
+    criterion = (-1) * cfg['w'][0] * sim + cfg['w'][1] * torch.var(clip_weights, dim=1)
+    
+    return criterion
+
 
 def cal_criterion(cfg, clip_weights, cache_keys, only_use_txt=True, training_free=True, force=False, with_IE=False):
     
@@ -228,4 +267,3 @@ def save_log(cfg, metric:dict):
         for key in metric.keys():
             with open(f'outputs/{key}.txt', 'a') as f:
                 f.write(f"{cfg['dataset']}_{cfg['shots']}_{cfg['seed']}: {metric[key]}\n")
-                

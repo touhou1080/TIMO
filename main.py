@@ -59,13 +59,17 @@ def main():
 
     # Textual features
     print("\nGetting textual features as CLIP's classifier.")
+    #  所有prompt的特征 [C, P, D] c: 类别数量 这里是100 p: prompt数量 这里是22 d：文本特征的维度 这里是1024
     clip_weights_cupl_all = torch.load(cfg['cache_dir'] + "/text_weights_cupl_t_all.pt", weights_only=False)
     cate_num, prompt_cupl_num, dim = clip_weights_cupl_all.shape
+    # 平均化的prompt的特征的转置 [D, C] [1024,100]
     clip_weights_cupl = clip_weights_cupl_all.mean(dim=1).t()
     clip_weights_cupl = clip_weights_cupl / clip_weights_cupl.norm(dim=0, keepdim=True)
     
     # Construct the cache model by few-shot training set
     print("\nConstructing cache model by few-shot visual features and labels.")
+    # cahce_value: onehot vector [C, C]
+    # cache_keys: 经过clip处理后的fewshot图形样本的张量 [C, D]
     cache_keys, cache_values = load_few_shot_feature(cfg)
 
     # Pre-load val features
@@ -81,11 +85,11 @@ def main():
 
 
     # ------------------------------------------ Fusion ------------------------------------------
-    
+    # image_weights_all: [100,shot_num,1024]
     image_weights_all = torch.stack([cache_keys.t()[torch.argmax(cache_values, dim=1)==i] for i in range(cate_num)])
     image_weights = image_weights_all.mean(dim=1)
     image_weights = image_weights / image_weights.norm(dim=1, keepdim=True) 
-    
+    # 因为目前测试用的few shot只取了一个样本 所以目前image_weights和cache_keys是一样的
     clip_weights_IGT, matching_score = image_guide_text(cfg, 
         clip_weights_cupl_all, image_weights, return_matching=True)
     clip_weights_IGT = clip_weights_IGT.t()
@@ -121,9 +125,15 @@ def main():
         grid_search=True, n_quick_search=10, is_print=True)
     metric['TIMO_S'] = acc_free
 
+    acc_free = timo_with_ape(cfg, cache_keys, cache_values, val_features, val_labels,  
+        test_features, test_labels, clip_weights_cupl,clip_weights_cupl_all,image_weights_all)
+    
+    metric['TIMO_APE_v1'] = acc_free 
+
+    timo_with_ape_v3(cfg, cache_keys, cache_values, val_features, val_labels, test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+
+    metric['TIMO_APE_v3'] = acc_free 
     save_log(cfg, metric)
-    
-    
     
 if __name__ == '__main__':
     main()

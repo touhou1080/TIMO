@@ -1,0 +1,2 @@
+set CUDA_VISIBLE_DEVICES=0
+python main.py --config configs/caltech101.yaml --shot 1 --seed 1

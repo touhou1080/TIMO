@@ -4,6 +4,7 @@ import argparse
 import yaml
 import numpy as np
 from tqdm import tqdm
+import json
 
 import torch
 import torch.nn.functional as F
@@ -174,13 +175,16 @@ def extract_text_feature_all(cfg, classnames, prompt_paths, clip_model, template
 if __name__ == '__main__':
     
     for backbone in ["RN50"]:  # "RN101", "RN50", "ViT-B/32", "ViT-B/16", "RN50x16", "RN50x4"
-        for seed in [1,2,3]: # 
+        #for seed in [1,2,3]: # 
+        for seed in [1]: # 
             clip_model, preprocess = clip.load(backbone)
             clip_model.eval()
             
-            all_dataset = ["caltech101", 'dtd', 'eurosat', 'fgvc', 'food101', 
-                'stanford_cars', 'sun397', 'ucf101', "oxford_flowers", "oxford_pets", "imagenet"]
-            k_shot = [1, 2, 4, 8, 16]
+            #all_dataset = ["caltech101", 'dtd', 'eurosat', 'fgvc', 'food101', 
+            #    'stanford_cars', 'sun397', 'ucf101', "oxford_flowers", "oxford_pets", "imagenet"]
+            all_dataset = ["caltech101"]
+            #k_shot = [1, 2, 4, 8, 16]
+            k_shot = [1]
             norm = True
 
             data_path = '../../DataSets/clip_fewshot'
