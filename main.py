@@ -27,11 +27,27 @@ def get_arguments():
     args = parser.parse_args()
     return args
 
+def new_main():
+    config_dir = "configs"
+    config_files = [
+        "caltech101.yaml", "dtd.yaml", "eurosat.yaml", "fgvc.yaml",
+        "food101.yaml", "oxford_flowers.yaml", "oxford_pets.yaml",
+        "ucf101.yaml"
+    ]
+    for config_file in config_files:
+        config_path = os.path.join(config_dir, config_file)
+        for seed in [2, 3]:
+            for shot in [1, 2, 4, 8, 16]:
+                args = argparse.Namespace()
+                args.seed = seed
+                args.shot = shot
+                args.dbg = 0
+                args.config = config_path
+                run_experiment(args)
 
-def main():
-
+def run_experiment(args):
     # Load config file
-    args = get_arguments()
+    #args = get_arguments()
     assert (os.path.exists(args.config))
     
     cfg = yaml.load(open(args.config, 'r'), Loader=yaml.Loader)
@@ -68,8 +84,8 @@ def main():
     
     # Construct the cache model by few-shot training set
     print("\nConstructing cache model by few-shot visual features and labels.")
-    # cahce_value: onehot vector [C, C]
-    # cache_keys: 经过clip处理后的fewshot图形样本的张量 [C, D]
+    # cache_keys: 经过clip处理后的fewshot图形样本的张量 [D,C * shot_num]
+    # cahce_value: onehot vector [C* shot_num, C]
     cache_keys, cache_values = load_few_shot_feature(cfg)
 
     # Pre-load val features
@@ -88,11 +104,10 @@ def main():
     # image_weights_all: [100,shot_num,1024]
     image_weights_all = torch.stack([cache_keys.t()[torch.argmax(cache_values, dim=1)==i] for i in range(cate_num)])
     image_weights = image_weights_all.mean(dim=1)
-    image_weights = image_weights / image_weights.norm(dim=1, keepdim=True) 
+    image_weights = image_weights / image_weights.norm(dim=1, keepdim=True) #[c,d]
     # 因为目前测试用的few shot只取了一个样本 所以目前image_weights和cache_keys是一样的
-    clip_weights_IGT, matching_score = image_guide_text(cfg, 
-        clip_weights_cupl_all, image_weights, return_matching=True)
-    clip_weights_IGT = clip_weights_IGT.t()
+    clip_weights_IGT, matching_score = image_guide_text(cfg,  clip_weights_cupl_all, image_weights, return_matching=True)
+    clip_weights_IGT = clip_weights_IGT.t()#[d,c]
     metric = {}
     
     # ------------------------------------------ Baseline ------------------------------------------
@@ -107,33 +122,58 @@ def main():
     metric['APE'] = acc_free
     
     # GDA-CLIP
+    print("GDA_CLIP acc ")
     acc_free = GDA_CLIP(cfg, val_features, val_labels, test_features, test_labels, clip_weights_cupl)
+    
     metric['GDA_CLIP'] = acc_free
     
     # ------------------------------------------ Ours ------------------------------------------
     # TIMO   
+    print("---------------------TIMO acc-------------------")
     acc_free = TIMO(cfg, val_features, val_labels, test_features, test_labels, 
         clip_weights_IGT, clip_weights_cupl_all, matching_score,
         grid_search=False, is_print=True)
     metric['TIMO'] = acc_free
 
+    
     # TIMO-S
-    clip_weights_IGT, matching_score = image_guide_text_search(cfg, 
-        clip_weights_cupl_all, val_features, val_labels, image_weights)
+    print("--------------TIMO_S acc-----------------------")
+    clip_weights_IGT_new, matching_score_new = image_guide_text_search(cfg, clip_weights_cupl_all, val_features, val_labels, image_weights)
     acc_free = TIMO(cfg, val_features, val_labels, test_features, test_labels, 
-        clip_weights_IGT, clip_weights_cupl_all, matching_score, 
+        clip_weights_IGT_new, clip_weights_cupl_all, matching_score_new, 
         grid_search=True, n_quick_search=10, is_print=True)
     metric['TIMO_S'] = acc_free
-
+    '''
+    print("--------------timo_with_ape acc-----------------------")
     acc_free = timo_with_ape(cfg, cache_keys, cache_values, val_features, val_labels,  
         test_features, test_labels, clip_weights_cupl,clip_weights_cupl_all,image_weights_all)
-    
     metric['TIMO_APE_v1'] = acc_free 
 
-    timo_with_ape_v3(cfg, cache_keys, cache_values, val_features, val_labels, test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    timo_with_ape_v2(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    metric['TIMO_APE_v2'] = acc_free 
 
+    timo_with_ape_v3(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
     metric['TIMO_APE_v3'] = acc_free 
-    save_log(cfg, metric)
+
     
+    timo_with_ape_v3_improved(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    metric['timo_with_ape_v3_improved'] = acc_free 
+
+    timo_with_soft_selection(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    metric['timo_with_soft_selection'] = acc_free 
+    '''
+
+    acc_free = timo_with_soft_selection_improved(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    metric['timo_with_soft_selection_improved'] = acc_free 
+
+    save_log(cfg, metric)
+
+
+
 if __name__ == '__main__':
-    main()
+    new_main()

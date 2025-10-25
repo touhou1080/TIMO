@@ -198,10 +198,15 @@ class ImageNet():
                                                 transforms.Normalize(mean=(0.48145466, 0.4578275, 0.40821073), std=(0.26862954, 0.26130258, 0.27577711))])
         test_preprocess = preprocess
 
-        self.train = torchvision.datasets.ImageNet(self.image_dir, split='train', transform=train_preprocess)
-        self.val = torchvision.datasets.ImageNet(self.image_dir, split='val', transform=test_preprocess)
-        self.test = torchvision.datasets.ImageNet(self.image_dir, split='val', transform=test_preprocess)
-        
+        #self.train = torchvision.datasets.ImageNet(self.image_dir, split='train', transform=train_preprocess)
+        #self.val = torchvision.datasets.ImageNet(self.image_dir, split='val', transform=test_preprocess)
+        #3self.test = torchvision.datasets.ImageNet(self.image_dir, split='val', transform=test_preprocess)
+        train_dir = os.path.join(self.image_dir, 'train')
+        val_dir = os.path.join(self.image_dir, 'val')
+        self.train = torchvision.datasets.ImageFolder(train_dir, transform=train_preprocess)
+        self.val = torchvision.datasets.ImageFolder(val_dir, transform=test_preprocess)
+        self.test = torchvision.datasets.ImageFolder(val_dir, transform=test_preprocess)
+
         self.template = imagenet_templates
         self.classnames = imagenet_classes
         self.cupl_path = './Prompt_CuPL/imagenet.json'

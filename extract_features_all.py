@@ -26,20 +26,21 @@ def extract_few_shot_feature(cfg, clip_model, train_loader_cache, norm=True):
         for augment_idx in range(cfg['augment_epoch']):
             train_features = []
             print('Augment Epoch: {:} / {:}'.format(augment_idx, cfg['augment_epoch']))
-            for i, (images, target) in enumerate(tqdm(train_loader_cache)):
-                images = images.cuda()
-                image_features = clip_model.encode_image(images) #100, 3, 224, 224
+            for i, (images, target) in enumerate(tqdm(train_loader_cache)):#target是ground truth
+                #100，3，224，224
+                images = images.cuda(non_blocking=True)
+                image_features = clip_model.encode_image(images) #100, 1024
                 train_features.append(image_features)
                 if augment_idx == 0:
-                    target = target.cuda()
+                    target = target.cuda(non_blocking=True)
                     cache_values.append(target)
             cache_keys.append(torch.cat(train_features, dim=0).unsqueeze(0))
         
-    cache_keys = torch.cat(cache_keys, dim=0).mean(dim=0)
+    cache_keys = torch.cat(cache_keys, dim=0).mean(dim=0)#[1,100,1024] * 10 cat 得到 [10, 100,1024]，然后用mean计算平均值
     if norm:
         cache_keys /= cache_keys.norm(dim=-1, keepdim=True)
-    cache_keys = cache_keys.permute(1, 0)
-    cache_values = F.one_hot(torch.cat(cache_values, dim=0)).half()
+    cache_keys = cache_keys.permute(1, 0)#1024,100
+    cache_values = F.one_hot(torch.cat(cache_values, dim=0)).half()#100,100
     
     if norm:
         torch.save(cache_keys, cfg['cache_dir'] + '/keys_' + str(cfg['shots']) + "shots.pt")
@@ -57,7 +58,7 @@ def extract_few_shot_feature_all(cfg, clip_model, train_loader_cache, norm=True)
         labels = []
         for i in range(cfg["augment_epoch"]):
             for image, target in tqdm(train_loader_cache):
-                image, target = image.cuda(), target.cuda()
+                image, target = image.cuda(non_blocking=True), target.cuda(non_blocking=True)
                 image_features = clip_model.encode_image(image)
                 if norm:
                     image_features = image_features / image_features.norm(dim=-1, keepdim=True)
@@ -78,7 +79,7 @@ def extract_val_test_feature(cfg, split, clip_model, loader, norm=True):
     features, labels = [], []
     with torch.no_grad():
         for i, (images, target) in enumerate(tqdm(loader)):
-            images, target = images.cuda(), target.cuda()
+            images, target = images.cuda(non_blocking=True), target.cuda(non_blocking=True)
             image_features = clip_model.encode_image(images)
             if norm:
                 image_features /= image_features.norm(dim=-1, keepdim=True)
@@ -114,7 +115,7 @@ def extract_text_feature(cfg, classnames, prompt_paths, clip_model, template, us
             else:
                 texts = template_texts
         
-            texts_token = clip.tokenize(texts, truncate=True).cuda()
+            texts_token = clip.tokenize(texts, truncate=True).cuda(non_blocking=True)
             # prompt ensemble for ImageNet
             class_embeddings = clip_model.encode_text(texts_token)
             class_embeddings /= class_embeddings.norm(dim=-1, keepdim=True)
@@ -122,7 +123,7 @@ def extract_text_feature(cfg, classnames, prompt_paths, clip_model, template, us
             class_embedding /= class_embedding.norm()
             clip_weights.append(class_embedding)
 
-        clip_weights = torch.stack(clip_weights, dim=1).cuda()
+        clip_weights = torch.stack(clip_weights, dim=1).cuda(non_blocking=True)
     if use_gpt_prompt:
         torch.save(clip_weights, cfg['cache_dir'] + "/text_weights_gpt_t.pt")
     else:
@@ -151,7 +152,7 @@ def extract_text_feature_all(cfg, classnames, prompt_paths, clip_model, template
             for prompt in prompts:
                 texts += prompt[classname] 
         
-            texts_token = clip.tokenize(texts, truncate=True).cuda()
+            texts_token = clip.tokenize(texts, truncate=True).cuda(non_blocking=True)
             # prompt ensemble for ImageNet
             class_embeddings = clip_model.encode_text(texts_token)
             if norm:
@@ -162,7 +163,7 @@ def extract_text_feature_all(cfg, classnames, prompt_paths, clip_model, template
         for i in range(len(clip_weights)):
             clip_weights[i] = clip_weights[i][:min_len]
 
-        clip_weights = torch.stack(clip_weights, dim=0).cuda()
+        clip_weights = torch.stack(clip_weights, dim=0).cuda(non_blocking=True)
         print(clip_weights.shape)
         
     if norm:
@@ -173,18 +174,17 @@ def extract_text_feature_all(cfg, classnames, prompt_paths, clip_model, template
 
 
 if __name__ == '__main__':
-    
     for backbone in ["RN50"]:  # "RN101", "RN50", "ViT-B/32", "ViT-B/16", "RN50x16", "RN50x4"
         #for seed in [1,2,3]: # 
-        for seed in [1]: # 
+        for seed in [2,3]: # 
             clip_model, preprocess = clip.load(backbone)
             clip_model.eval()
             
             #all_dataset = ["caltech101", 'dtd', 'eurosat', 'fgvc', 'food101', 
             #    'stanford_cars', 'sun397', 'ucf101', "oxford_flowers", "oxford_pets", "imagenet"]
-            all_dataset = ["caltech101"]
+            all_dataset = ["dtd","eurosat","fgvc","ucf101","oxford_flowers","oxford_pets","food101"]
             #k_shot = [1, 2, 4, 8, 16]
-            k_shot = [1]
+            k_shot = [1, 2, 4, 8, 16]
             norm = True
 
             data_path = '../../DataSets/clip_fewshot'
@@ -211,8 +211,8 @@ if __name__ == '__main__':
                         train_loader_cache = torch.utils.data.DataLoader(dataset.train, batch_size=256, num_workers=8, shuffle=False)           
                     else:   
                         dataset = build_dataset(set, data_path, k)
-                        val_loader = build_data_loader(data_source=dataset.val, batch_size=64, is_train=False, tfm=preprocess, shuffle=False)
-                        test_loader = build_data_loader(data_source=dataset.test, batch_size=64, is_train=False, tfm=preprocess, shuffle=False)
+                        val_loader = build_data_loader(data_source=dataset.val, batch_size=128, is_train=False, tfm=preprocess, shuffle=False)
+                        test_loader = build_data_loader(data_source=dataset.test, batch_size=128, is_train=False, tfm=preprocess, shuffle=False)
 
                         train_tranform = transforms.Compose([
                             transforms.RandomResizedCrop(size=224, scale=(0.5, 1), interpolation=transforms.InterpolationMode.BICUBIC),

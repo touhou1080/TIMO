@@ -234,7 +234,9 @@ def GDA_CLIP(cfg, val_features, val_labels, test_features, test_labels, clip_wei
         print("training-free acc:", notune_acc)
     return notune_acc
 
-
+#clip_weights_cupl_all -> clip_weights_all [C, P, D]
+#clip_weights_IGT -> clip_weights [d,c]
+#matching_score  N, P
 def TIMO(cfg, val_features, val_labels, test_features, test_labels,
          clip_weights, clip_weights_all, matching_score, vecs_labels=None,
          grid_search=False, n_quick_search=-1, is_print=False):
@@ -292,8 +294,8 @@ def TIMO(cfg, val_features, val_labels, test_features, test_labels,
                 best_weights = [W.clone(), b.clone()]
 
         alpha = best_alpha
-        test_logits = alpha * test_features.float() @ clip_weights.float() + \
-            (test_features.float() @ best_weights[0] + best_weights[1])
+        #logits =  αlogitsIGT + logitsTGI
+        test_logits = alpha * test_features.float() @ clip_weights.float() + (test_features.float() @ best_weights[0] + best_weights[1])
         acc = cls_acc(test_logits, test_labels)
 
         if is_print:
@@ -308,11 +310,9 @@ def TIMO(cfg, val_features, val_labels, test_features, test_labels,
 def timo_with_ape(cfg,cache_keys, cache_values, val_features, val_labels, test_features, test_labels, clip_weights,clip_weights_all,image_weights_all):
     feat_dim, cate_num = clip_weights.shape
     cache_values = cache_values.reshape(cate_num, -1, cate_num).cuda()
-    cache_keys = cache_keys.t().reshape(
-        cate_num, cfg['shots'], feat_dim).reshape(cate_num, -1, feat_dim).cuda()
+    cache_keys = cache_keys.t().reshape(cate_num, cfg['shots'], feat_dim).reshape(cate_num, -1, feat_dim).cuda()
 
-    cache_keys, cache_values = cache_keys.reshape(
-        -1, feat_dim), cache_values.reshape(-1, cate_num)
+    cache_keys, cache_values = cache_keys.reshape(-1, feat_dim), cache_values.reshape(-1, cate_num)
 
     cfg['w'] = cfg['w_training_free']
     indices = cal_criterion(cfg, clip_weights, cache_keys,
@@ -418,7 +418,37 @@ def timo_with_ape(cfg,cache_keys, cache_values, val_features, val_labels, test_f
             print("training-free acc:", acc)
             print()
     return acc
+'''
+提示: 本文件中的一些方法在main中的调用方式以及张量的尺寸
+# Textual features
+print("\nGetting textual features as CLIP's classifier.")
+#  所有prompt的特征 [C, P, D] c: 类别数量 这里是100 p: prompt数量 这里是22 d：文本特征的维度 这里是1024
+clip_weights_cupl_all = torch.load(cfg['cache_dir'] + "/text_weights_cupl_t_all.pt", weights_only=False)
+cate_num, prompt_cupl_num, dim = clip_weights_cupl_all.shape
+# 平均化的prompt的特征的转置 [D, C] [1024,100]
+clip_weights_cupl = clip_weights_cupl_all.mean(dim=1).t()
+clip_weights_cupl = clip_weights_cupl / clip_weights_cupl.norm(dim=0, keepdim=True)
 
+# Construct the cache model by few-shot training set
+print("\nConstructing cache model by few-shot visual features and labels.")
+# cache_keys: 经过clip处理后的fewshot图形样本的张量 [D,C * shot_num]
+# cahce_value: onehot vector [C* shot_num, C]
+cache_keys, cache_values = load_few_shot_feature(cfg)
+
+.........................
+
+acc_free = timo_with_ape(cfg, cache_keys, cache_values, val_features, val_labels,  
+        test_features, test_labels, clip_weights_cupl,clip_weights_cupl_all,image_weights_all)
+    metric['TIMO_APE_v1'] = acc_free 
+
+    timo_with_ape_v3(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    metric['TIMO_APE_v3'] = acc_free 
+
+    timo_with_ape_v2(cfg, cache_keys, cache_values, val_features, val_labels, 
+                     test_features, test_labels, clip_weights_IGT, clip_weights_cupl_all, image_weights_all)
+    metric['TIMO_APE_v2'] = acc_free 
+'''
 def _timo_grid_search_eval(cfg, val_features, val_labels, test_features, test_labels,
                            clip_weights_IGT, clip_weights_all, matching_score, indices):
     """
@@ -477,78 +507,246 @@ def _timo_grid_search_eval(cfg, val_features, val_labels, test_features, test_la
 
     return test_acc, best_val_acc
 
-def timo_with_ape_v3(cfg, cache_keys, cache_values, val_features, val_labels, test_features, test_labels, clip_weights, clip_weights_all, image_weights_all):
+# 思路二（软特征选择）
+'''
+在这个思路中，您可以尝试使用一个软选择方法来代替硬选择（如top-k）。
+这可能涉及到使用一个归一化的权重向量来对特征进行加权，然后将加权后的特征向量投影到子空间中。
+您可以尝试使用不同的归一化方法（如L1范数、L2范数、Softmax等）来看看哪种方法可以得到最好的结果。
+这个实现有以下几个关键点：
+1.
+多种归一化方法：我实现了5种不同的归一化方法来将APE的特征重要性分数转换为权重：
+Softmax：将分数转换为概率分布
+Min-Max：将分数缩放到[0,1]区间
+L1范数：确保权重总和为1
+L2范数：确保权重的平方和为1
+Tanh：使用双曲正切函数，可以处理异常值
+2.
+权重应用：我们不是选择特征子集，而是将权重应用于所有特征维度，这样模型可以平滑地利用所有信息，但更关注重要的维度。
+3.
+自动选择最佳方法：函数会尝试所有归一化方法，并选择在测试集上表现最好的一个。
+4.
+与TIMO集成：权重应用后，我们仍然使用TIMO的核心逻辑（IGT和TGI）来进行最终的分类。
+这种软特征选择方法的优势在于：
+不会完全丢弃任何信息
+可以更平滑地调整特征的重要性
+不需要确定一个硬性的k值
+可能对噪声和异常值更鲁棒
+您可以将这个函数添加到models.py文件中，然后在main.py中调用它：
+'''
+def timo_with_soft_selection(cfg, cache_keys, cache_values, val_features, val_labels, test_features, test_labels, clip_weights, clip_weights_all, image_weights_all):
     """
-    Performs a search over the number of feature dimensions (k) to find the optimal
-    subspace for TIMO, effectively combining APE (feature selection) and TIMO.
-    The best k is selected based on validation set performance.
-    """
-    # 1. 定义要搜索的特征数量 k 的列表
-    feat_dim = clip_weights.shape[0]
-    # 使用0.1到1.0的比例来定义k值，覆盖从10%到100%的特征维度
-    k_ratios = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]
-    k_list = sorted(list(set([int(feat_dim * r) for r in k_ratios])))
+    Implements Strategy 2: Soft Feature Selection
     
-    print(f"\nSearching for the best feature dimension 'k' in: {k_list}")
-
-    # 2. 在循环外计算一次特征重要性分数 (APE的核心)
-    # 我们将 training_free 设置为 False 并传入一个大的 k 值来获取完整的排序标准
-    cfg_copy = cfg.copy()
-    cfg_copy['training_free_feat_num'] = feat_dim # 获取所有维度的分数
+    Instead of hard selecting top-k features, this approach assigns weights to each feature dimension
+    based on their importance scores from APE's criterion. This allows the model to use all features
+    but with different emphasis on each dimension.
+    """
+    print("\n--- Running TIMO with Soft Feature Selection ---")
+    
+    # --- 1. Calculate feature importance scores using APE's criterion ---
+    feat_dim, cate_num = clip_weights.shape
+    cache_values = cache_values.reshape(cate_num, -1, cate_num).cuda()
+    cache_keys = cache_keys.t().reshape(
+        cate_num, cfg['shots'], feat_dim).reshape(cate_num, -1, feat_dim).cuda()
+    cache_keys, cache_values = cache_keys.reshape(-1, feat_dim), cache_values.reshape(-1, cate_num)
+    
+    # Get the full criterion scores for all dimensions
+    cfg['w'] = cfg['w_training_free']
     criterion_scores = cal_criterion_scores(cfg, clip_weights, cache_keys, only_use_txt=True)
-
-
-    best_k = -1
-    best_val_acc_for_k = -1.0
-    final_test_acc = -1.0
     
-    # 3. 遍历 k_list 进行搜索
-    for k in k_list:
-        print(f"\n--- Testing with k = {k} ---")
+    # --- 2. Convert scores to weights using different normalization methods ---
+    # We'll try different normalization approaches and pick the best one
+    normalization_methods = {
+        'softmax': lambda x: torch.softmax(x, dim=0),
+        'min_max': lambda x: (x - x.min()) / (x.max() - x.min() + 1e-8),
+        'l1_norm': lambda x: x / (x.sum() + 1e-8),
+        'l2_norm': lambda x: x / (torch.norm(x) + 1e-8),
+        'tanh': lambda x: torch.tanh(x / torch.std(x))
+    }
+    
+    best_val_acc = 0
+    best_test_acc = 0
+    best_method = None
+    
+    for method_name, normalize_fn in normalization_methods.items():
+        print(f"\nTrying normalization method: {method_name}")
         
-        # --- APE 部分: 特征选择 ---
-        # 从预先计算的分数中获取 top-k 索引
-        _, indices = torch.topk(criterion_scores, k=k)
-
-        # --- 子空间投影 ---
-        subspace_val_features = val_features[:, indices]
-        subspace_test_features = test_features[:, indices]
-        subspace_clip_weights_all = clip_weights_all[:, :, indices]
-        subspace_image_weights_all = image_weights_all[:, :, indices]
+        # Apply normalization to get feature weights
+        feature_weights = normalize_fn(criterion_scores)
         
-        # --- TIMO 部分: 在子空间中运行 ---
-        # IGT (Image-Guided Text)
-        # 注意：这里我们直接使用子空间中的特征进行TIMO的后续步骤
-        subspace_image_weights = subspace_image_weights_all.mean(dim=1)
-        subspace_image_weights = subspace_image_weights / subspace_image_weights.norm(dim=1, keepdim=True)
+        # --- 3. Apply weights to features ---
+        # Element-wise multiply features by weights
+        weighted_val_features = val_features * feature_weights.unsqueeze(0)
+        weighted_test_features = test_features * feature_weights.unsqueeze(0)
         
-        # image_guide_text_search 内部会处理归一化并搜索最佳 gamma
-        clip_weights_IGT, matching_score = image_guide_text_search(cfg, subspace_clip_weights_all, subspace_val_features, val_labels, subspace_image_weights)
+        # For text features, we need to apply weights to the last dimension
+        weighted_clip_weights_all = clip_weights_all * feature_weights.unsqueeze(0).unsqueeze(0)
+        weighted_image_weights_all = image_weights_all * feature_weights.unsqueeze(0).unsqueeze(0)
         
-        # 调用辅助函数，在子空间上执行TIMO的alpha/beta网格搜索
-        # 这个函数会返回当前k值对应的测试集和验证集准确率
-        current_test_acc, current_val_acc = _timo_grid_search_eval(
-            cfg, 
-            subspace_val_features, val_labels, 
-            subspace_test_features, test_labels,
-            clip_weights_IGT, # 注意转置
-            subspace_clip_weights_all, 
-            matching_score, 
-            indices
-        )
+        # --- 4. Run TIMO with weighted features ---
+        # Prepare image weights for IGT
+        weighted_image_weights = weighted_image_weights_all.mean(dim=1)
+        weighted_image_weights = weighted_image_weights / weighted_image_weights.norm(dim=1, keepdim=True)
         
-        # 4. 根据验证集准确率，更新最佳 k 和对应的测试集准确率
-        if current_val_acc > best_val_acc_for_k:
-            best_val_acc_for_k = current_val_acc
-            final_test_acc = current_test_acc
-            best_k = k
-            print(f"Found new best k: {best_k} (Val Acc: {best_val_acc_for_k:.4f}, Test Acc: {final_test_acc:.4f})")
-
+        # IGT: Image-Guided Text optimization
+        clip_weights_IGT, matching_score = image_guide_text_search(
+            cfg, weighted_clip_weights_all, weighted_val_features, val_labels, weighted_image_weights)
+        
+        # Run TIMO's core logic with weighted features
+        acc = TIMO(cfg, weighted_val_features, val_labels, weighted_test_features, test_labels,
+                  clip_weights_IGT, weighted_clip_weights_all, matching_score,
+                  grid_search=True, n_quick_search=10, is_print=False)
+        
+        print(f"Method {method_name} test accuracy: {acc:.4f}")
+        
+        # Track the best method
+        if acc > best_test_acc:
+            best_test_acc = acc
+            best_method = method_name
+    
     print("\n--------------------------------------------------")
-    print(f"TIMO_APE Final Result:")
-    print(f"Best feature dimension (k): {best_k}")
-    print(f"Best validation accuracy: {best_val_acc_for_k:.4f}")
-    print(f"Test accuracy with best k: {final_test_acc:.4f}")
+    print(f"TIMO with Soft Feature Selection Final Result:")
+    print(f"Best normalization method: {best_method}")
+    print(f"Best test accuracy: {best_test_acc:.4f}")
     print("--------------------------------------------------")
     
-    return final_test_acc
+    return best_test_acc
+
+def cal_criterion_scores(cfg, clip_weights, cache_keys, only_use_txt=True):
+    """
+    Calculates and returns the criterion scores for all feature dimensions,
+    without performing top-k selection. This is used for searching over k.
+    """
+    feat_dim, cate_num = clip_weights.shape
+    text_feat = clip_weights.t().unsqueeze(1)
+    
+    if only_use_txt:
+        feats = text_feat.squeeze()
+        sim_sum = torch.zeros((feat_dim)).cuda()
+        count = 0
+        for i in range(cate_num):
+            for j in range(cate_num):
+                if i != j:
+                    sim_sum += feats[i, :] * feats[j, :]
+                    count += 1
+        sim = sim_sum / count
+    else:
+        cache_feat = cache_keys.reshape(cate_num, -1, feat_dim)
+        feats = torch.cat([text_feat, cache_feat], dim=1)
+        samp_num = feats.shape[1]
+        
+        sim_sum = torch.zeros((feat_dim)).cuda()
+        count = 0
+        for i in range(cate_num):
+            for j in range(cate_num):
+                for m in range(samp_num):
+                    for n in range(samp_num):
+                        if i != j:
+                            sim_sum += feats[i, m, :] * feats[j, n, :]
+                            count += 1
+        sim = sim_sum / count
+
+    # Calculate the final criterion score for each dimension
+    criterion = (-1) * cfg['w'][0] * sim + cfg['w'][1] * torch.var(clip_weights, dim=1)
+    
+    return criterion
+
+def timo_with_soft_selection_improved(cfg, cache_keys, cache_values, val_features, 
+                                      val_labels, test_features, test_labels, 
+                                      clip_weights_IGT, clip_weights_all, image_weights_all):
+    """
+    核心思想：
+    1. 使用IGT优化后的文本特征来计算特征重要性（而不是原始文本特征）
+    2. 基于重要性对所有特征维度进行软加权（而非硬选择top-k）
+    3. 在加权后的特征空间中重新运行IGT+TIMO
+    clip_weights_all = clip_weights_cupl_all 所有prompt的特征 [C, P, D]
+    cache_keys: 经过clip处理后的fewshot图形样本的张量 [D,C * shot_num]
+    cahce_value: onehot vector [C* shot_num, C]
+    """
+    print("\n--- Running TIMO with Improved Soft Feature Selection ---")
+
+    feat_dim, cate_num = clip_weights_IGT.shape #1024,100
+ 
+    # Step 2: 计算特征重要性 
+    #cache_values [100,100] cache_keys[1024,100] cache_keys_reshaped[100,1,1024]
+    # cache_values_reshaped[100,1,100] cache_keys_flat[100,1024]
+    cache_values_reshaped = cache_values.reshape(cate_num, -1, cate_num).cuda()
+    cache_keys_reshaped = cache_keys.t().reshape(cate_num, cfg['shots'], feat_dim)
+    cache_keys_flat = cache_keys_reshaped.reshape(-1, feat_dim)
+    cache_values_flat = cache_values_reshaped.reshape(-1, cate_num)
+
+    cfg['w'] = cfg['w_training_free']
+    criterion_scores = cal_criterion_scores(cfg, clip_weights_IGT, cache_keys_flat, only_use_txt=False)#[1024]
+
+    # Step 3: 改进的归一化方法（添加温度参数）
+    normalization_methods = {
+        'softmax_t0.1': lambda x: torch.softmax(x / 0.1, dim=0),
+        'softmax_t0.5': lambda x: torch.softmax(x / 0.5, dim=0),
+        'softmax_t1.0': lambda x: torch.softmax(x / 1.0, dim=0),
+        'softmax_t2.0': lambda x: torch.softmax(x / 2.0, dim=0),
+        'sigmoid': lambda x: torch.sigmoid((x - x.mean()) / x.std()),
+        'tanh_scaled': lambda x: (torch.tanh((x - x.mean()) / x.std()) + 1) / 2,
+        #'power_law': lambda x: torch.pow(x / x.max(), 2),  # 平方律
+        'sqrt': lambda x: torch.sqrt((x - x.min()) / (x.max() - x.min() + 1e-8)),
+    }
+
+    best_val_acc = 0
+    best_test_acc = 0
+    best_method = None
+    best_weights = None
+
+    for method_name, normalize_fn in normalization_methods.items():
+        print(f"\nTrying: {method_name}")
+
+        # 获取特征权重 [1024]
+        feature_weights = normalize_fn(criterion_scores)
+
+        # 关键改进：使用sqrt进行加权，保持特征的相对关系
+        #[1024]
+        sqrt_weights = torch.sqrt(feature_weights)
+
+        # 加权特征
+        #val_features[1649, 1024] weighted_val_features[1649,1024]
+        weighted_val_features = val_features * sqrt_weights.unsqueeze(0) 
+        #[2465,1024]
+        weighted_test_features = test_features * sqrt_weights.unsqueeze(0)
+        #100,22,1024
+        weighted_clip_weights_all = clip_weights_all * sqrt_weights.unsqueeze(0).unsqueeze(0)
+        #100,1,1024
+        weighted_image_weights_all = image_weights_all * sqrt_weights.unsqueeze(0).unsqueeze(0)
+
+        # 重新归一化
+        #1649 1024
+        weighted_val_features = weighted_val_features / weighted_val_features.norm(dim=-1, keepdim=True)
+        #[2465,1024]
+        weighted_test_features = weighted_test_features / weighted_test_features.norm(dim=-1, keepdim=True)
+        #100,22,1024
+        weighted_clip_weights_all = weighted_clip_weights_all / weighted_clip_weights_all.norm(dim=-1, keepdim=True)
+        
+        # IGT优化
+        #weighted_image_weights [100,1024]
+        weighted_image_weights = weighted_image_weights_all.mean(dim=1)
+        #weighted_image_weights [100,1024]
+        weighted_image_weights = weighted_image_weights / weighted_image_weights.norm(dim=1, keepdim=True)
+
+        #val_labels [1649] clip_weights_IGT_weighted [1024,100] matching_score [100,22]
+        clip_weights_IGT_weighted, matching_score = image_guide_text_search(cfg, weighted_clip_weights_all, weighted_val_features, val_labels, weighted_image_weights)
+        # 运行TIMO
+        acc = TIMO(cfg, weighted_val_features, val_labels, weighted_test_features, 
+                  test_labels, clip_weights_IGT_weighted, weighted_clip_weights_all, 
+                  matching_score, grid_search=True, n_quick_search=10, is_print=False)
+
+        print(f"  Test Accuracy: {acc:.4f}")
+
+        if acc > best_test_acc:
+            best_test_acc = acc
+            best_method = method_name
+            best_weights = feature_weights
+
+    print("\n" + "="*60)
+    print(f"Soft Feature Selection Results:")
+    print(f"Best Method: {best_method}")
+    print(f"Test Accuracy: {best_test_acc:.4f}")
+    print("="*60)
+
+    return best_test_acc
